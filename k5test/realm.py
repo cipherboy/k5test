@@ -42,6 +42,7 @@ _LOG = logging.getLogger(__name__)
 
 
 def _cfg_merge(cfg1, cfg2):
+    """Augments cfg1 with entries from cfg2"""
     if not cfg2:
         return cfg1
     if not cfg1:
@@ -104,6 +105,27 @@ class K5Realm(object):
                  krbtgt_keysalt=None, create_user=True, get_creds=True,
                  create_host=True, start_kdc=True, start_kadmind=False,
                  existing=None, **paths):
+        """Create a new MIT Kerberos Realm class; optionally create and start
+        associated daemons
+
+        Args:
+            realm (str): the name of the realm (defaults to KRBTEST.COM)
+            portbase (int): minimum port number for associated services;
+                $port0...$port9 are possible subtitutions in the config
+            krb5_config (dict): krb5 config to use (default if None)
+            kdc_config (dict): kdc_config to use (default if None)
+            create_kdb (bool): whether or not to create the KDB
+            krbtgt_keysalt (str): Keysalt list to use for krbtgt principal
+            create_user (bool): whether or not to create default users:
+                user/user and admin/admin
+            get_creds (bool): whether or not to kinit as the default user
+            create_host (bool): whether or not to create a keytab entry for
+                the host machine
+            start_kdc (bool): whether or not to start the KDC
+            start_kadmin (bool): whether or not to start the kadmind service
+            existing (str): directory for configuration, kdb, etc.
+            paths (**str): paths to search for executables
+        """
 
         if existing is not None:
             self.tmpdir = existing
@@ -225,6 +247,7 @@ class K5Realm(object):
 
     @property
     def hostname(self):
+        """Gets the hostname of the system"""
         return socket.getfqdn()
 
     def _subst_cfg_value(self, value):
@@ -267,6 +290,17 @@ class K5Realm(object):
         return env
 
     def run(self, args, env=None, input=None, expected_code=0):
+        """Runs a command in the environment of the K5Realm.
+
+        Args:
+            args (str or list): program with arguments to execute
+            env (dict): environment for the processes (default if None)
+            input (str): stdin for the process (empty if None)
+            expected_code (int): expected return code
+
+        Returns:
+            str: the console output of the command
+        """
         if env is None:
             env = self.env
 
@@ -298,12 +332,14 @@ class K5Realm(object):
         self._devnull.close()
 
     def kprop_port(self):
+        """Get the port for the kpropd service"""
         return self.portbase + 3
 
     def server_port(self):
         return self.portbase + 5
 
     def create_kdb(self):
+        """Create the KDC"""
         self.run([self.kdb5_util, 'create', '-W', '-s', '-P', 'master'])
 
     def _start_daemon(self, args, env, sentinel):
@@ -330,6 +366,12 @@ class K5Realm(object):
         return proc
 
     def start_kdc(self, args=[], env=None):
+        """Start the KDC daemon
+
+        Args:
+            args (list): arguments to pass to the krb5kdc daemon
+            env (dict): environment to run the kdc in (default if None)
+        """
         if env is None:
             env = self.env
         assert(self._kdc_proc is None)
@@ -342,11 +384,13 @@ class K5Realm(object):
         self._daemons.remove(proc)
 
     def stop_kdc(self):
+        """Stop the KDC daemon"""
         assert(self._kdc_proc is not None)
         self._stop_daemon(self._kdc_proc)
         self._kdc_proc = None
 
     def start_kadmind(self, env=None):
+        """Start the kadmind daemon"""
         if env is None:
             env = self.env
         assert(self._kadmind_proc is None)
@@ -358,11 +402,13 @@ class K5Realm(object):
                                                 'starting...')
 
     def stop_kadmind(self):
+        """Stop the kadmind daemon"""
         assert(self._kadmind_proc is not None)
         self.stop_daemon(self._kadmind_proc)
         self._kadmind_proc = None
 
     def stop(self):
+        """Stop all running daemons; remove if not an existing kdc"""
         if self._kdc_proc:
             self.stop_kdc()
         if self._kadmind_proc:
@@ -372,16 +418,40 @@ class K5Realm(object):
             shutil.rmtree(self.tmpdir)
 
     def addprinc(self, princname, password=None):
+        """Add a principal to the realm
+
+        Args:
+            princname (str): name of the new principal
+            password (str): password for principal (random host key if None)
+        """
         if password:
             self.run_kadminl('addprinc -pw %s %s' % (password, princname))
         else:
             self.run_kadminl('addprinc -randkey %s' % princname)
 
     def extract_keytab(self, princname, keytab):
+        """Create a keytab entry for a principal
+
+        Args:
+            princname (str): name of the principal
+            keytab (str): path to desired keytab location
+        """
         self.run_kadminl('ktadd -k %s -norandkey %s' % (keytab, princname))
 
     def kinit(self, princname, password=None, flags=[], verbose=True,
               **keywords):
+        """Perform a kinit for a given user
+
+        Args:
+            princname (str): name of the principal
+            password (str): password of the principal (empty if None)
+            flags (list): arguments to pass to kinit
+            verbose (bool): verbose kinit output
+            keywords (**dict): additional arguments to pass to run
+
+        Returns:
+            str: the output of kinit
+        """
         if password:
             input = password + "\n"
         else:
@@ -395,6 +465,12 @@ class K5Realm(object):
         return self.run(cmd, input=input, **keywords)
 
     def klist(self, ccache=None, **keywords):
+        """Perform a klist operation against a ccache
+
+        Args:
+            ccache (str): ccache to execute against (default if None)
+            keywords (**dict): additional arguments to pass to run
+        """
         if ccache is None:
             ccache = self.ccache
         ccachestr = ccache
@@ -403,12 +479,24 @@ class K5Realm(object):
         return self.run([self._klist, ccache], **keywords)
 
     def klist_keytab(self, keytab=None, **keywords):
+        """Perform a klist operation against a keytab
+
+        Args:
+            keytab (str): keytab to execute against (default if None)
+            keywords (**dict): additional arguments to pass to run
+        """
         if keytab is None:
             keytab = self.keytab
         output = self.run([self._klist, '-k', keytab], **keywords)
         return output
 
     def run_kadminl(self, query, env=None):
+        """Run a local kadmin query
+
+        Args:
+            query (str): kadmin query to execute
+            env (dict): optional environment to execute kadmin_local in
+        """
         return self.run([self.kadmin_local, '-q', query], env=env)
 
     def password(self, name):
@@ -424,6 +512,12 @@ class K5Realm(object):
                                  '-c', self.kadmin_ccache] + flags)
 
     def run_kadmin(self, query, **keywords):
+        """Run a kadmin query
+
+        Args:
+            query (str): kadmin query to execute
+            env (dict): optional environment to execute kadmin in
+        """
         return self.run([self.kadmin, '-c', self.kadmin_ccache, '-q', query],
                         **keywords)
 
@@ -440,6 +534,7 @@ class K5Realm(object):
         return self._make_env(krb5_conf_path, kdc_conf_path)
 
     def kill_daemons(self):
+        """Kills running daemons"""
         # clean up daemons
         for proc in self._daemons:
             os.kill(proc.pid, signal.SIGTERM)
