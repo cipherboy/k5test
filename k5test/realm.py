@@ -79,22 +79,22 @@ _default_kdc_conf = {
         '$realm': {
             'database_module': 'db',
             'iprop_port': '$port4',
-            'key_stash_file': '$tmpdir/stash',
-            'acl_file': '$tmpdir/acl',
-            'dictfile': '$tmpdir/dictfile',
+            'key_stash_file': '$basedir/stash',
+            'acl_file': '$basedir/acl',
+            'dictfile': '$basedir/dictfile',
             'kadmind_port': '$port1',
             'kpasswd_port': '$port2',
             'kdc_ports': '$port0',
             'kdc_tcp_ports': '$port0',
-            'database_name': '$tmpdir/db'}},
+            'database_name': '$basedir/db'}},
     'dbmodules': {
         'db_module_dir': os.path.join(_utils.find_plugin_dir(),
                                       'kdb'),
-        'db': {'db_library': 'db2', 'database_name': '$tmpdir/db'}},
+        'db': {'db_library': 'db2', 'database_name': '$basedir/db'}},
     'logging': {
-        'admin_server': 'FILE:$tmpdir/kadmind5.log',
-        'kdc': 'FILE:$tmpdir/kdc.log',
-        'default': 'FILE:$tmpdir/others.log'}}
+        'admin_server': 'FILE:$basedir/kadmind5.log',
+        'kdc': 'FILE:$basedir/kdc.log',
+        'default': 'FILE:$basedir/others.log'}}
 
 
 class K5Realm(object):
@@ -103,15 +103,14 @@ class K5Realm(object):
                  krb5_conf=None, kdc_conf=None, create_kdb=True,
                  krbtgt_keysalt=None, create_user=True, get_creds=True,
                  create_host=True, start_kdc=True, start_kadmind=False,
-                 existing=None, **paths):
+                 existing=False, basedir=None, **paths):
 
-        if existing is not None:
-            self.tmpdir = existing
-            self.is_existing = True
+        if basedir is not None:
+            self.basedir = basedir
         else:
-            self.tmpdir = tempfile.mkdtemp(suffix='-krbtest')
-            self.is_existing = False
+            self.basedir = tempfile.mkdtemp(suffix='-krbtest')
 
+        self.is_existing = existing
         self.realm = realm
         self.portbase = portbase
         self.user_princ = 'user@' + self.realm
@@ -119,16 +118,16 @@ class K5Realm(object):
         self.host_princ = 'host/%s@%s' % (self.hostname, self.realm)
         self.nfs_princ = 'nfs/%s@%s' % (self.hostname, self.realm)
         self.krbtgt_princ = 'krbtgt/%s@%s' % (self.realm, self.realm)
-        self.keytab = os.path.join(self.tmpdir, 'keytab')
-        self.client_keytab = os.path.join(self.tmpdir, 'client_keytab')
-        self.ccache = os.path.join(self.tmpdir, 'ccache')
-        self.kadmin_ccache = os.path.join(self.tmpdir, 'kadmin_ccache')
+        self.keytab = os.path.join(self.basedir, 'keytab')
+        self.client_keytab = os.path.join(self.basedir, 'client_keytab')
+        self.ccache = os.path.join(self.basedir, 'ccache')
+        self.kadmin_ccache = os.path.join(self.basedir, 'kadmin_ccache')
         self._krb5_conf = _cfg_merge(_default_krb5_conf, krb5_conf)
         self._kdc_conf = _cfg_merge(_default_kdc_conf, kdc_conf)
         self._kdc_proc = None
         self._kadmind_proc = None
-        krb5_conf_path = os.path.join(self.tmpdir, 'krb5.conf')
-        kdc_conf_path = os.path.join(self.tmpdir, 'kdc.conf')
+        krb5_conf_path = os.path.join(self.basedir, 'krb5.conf')
+        kdc_conf_path = os.path.join(self.basedir, 'kdc.conf')
         self.env = self._make_env(krb5_conf_path, kdc_conf_path)
 
         self._daemons = []
@@ -137,7 +136,7 @@ class K5Realm(object):
 
         self._devnull = open(os.devnull, 'r')
 
-        if existing is None:
+        if not self.is_existing:
             self._create_conf(self._krb5_conf, krb5_conf_path)
             self._create_conf(self._kdc_conf, kdc_conf_path)
             self._create_acl()
@@ -230,7 +229,7 @@ class K5Realm(object):
     def _subst_cfg_value(self, value):
         template = string.Template(value)
         return template.substitute(realm=self.realm,
-                                   tmpdir=self.tmpdir,
+                                   basedir=self.basedir,
                                    hostname=self.hostname,
                                    port0=self.portbase,
                                    port1=self.portbase + 1,
@@ -244,13 +243,13 @@ class K5Realm(object):
                                    port9=self.portbase + 9)
 
     def _create_acl(self):
-        filename = os.path.join(self.tmpdir, 'acl')
+        filename = os.path.join(self.basedir, 'acl')
         with open(filename, 'w') as acl_file:
             acl_file.write('%s *\n' % self.admin_princ)
             acl_file.write('kiprop/%s@%s p\n' % (self.hostname, self.realm))
 
     def _create_dictfile(self):
-        filename = os.path.join(self.tmpdir, 'dictfile')
+        filename = os.path.join(self.basedir, 'dictfile')
         with open(filename, 'w') as dict_file:
             dict_file.write('weak_password\n')
 
@@ -261,7 +260,7 @@ class K5Realm(object):
         env['KRB5CCNAME'] = self.ccache
         env['KRB5_KTNAME'] = self.keytab
         env['KRB5_CLIENT_KTNAME'] = self.client_keytab
-        env['KRB5RCACHEDIR'] = self.tmpdir
+        env['KRB5RCACHEDIR'] = self.basedir
         env['KPROPD_PORT'] = six.text_type(self.kprop_port())
         env['KPROP_PORT'] = six.text_type(self.kprop_port())
         return env
@@ -350,7 +349,7 @@ class K5Realm(object):
         if env is None:
             env = self.env
         assert(self._kadmind_proc is None)
-        dump_path = os.path.join(self.tmpdir, 'dump')
+        dump_path = os.path.join(self.basedir, 'dump')
         self._kadmind_proc = self._start_daemon([self.kadmind, '-nofork', '-W',
                                                  '-p', self.kdb5_util,
                                                  '-K', self.kprop,
@@ -368,8 +367,8 @@ class K5Realm(object):
         if self._kadmind_proc:
             self.stop_kadmind()
 
-        if self.tmpdir and not self.is_existing:
-            shutil.rmtree(self.tmpdir)
+        if self.basedir and not self.is_existing:
+            shutil.rmtree(self.basedir)
 
     def addprinc(self, princname, password=None):
         if password:
@@ -413,7 +412,7 @@ class K5Realm(object):
 
     def password(self, name):
         """Get a weakly random password from name, consistent across calls."""
-        return name + six.text_type(os.path.basename(self.tmpdir))
+        return name + six.text_type(os.path.basename(self.basedir))
 
     def prep_kadmin(self, princname=None, pw=None, flags=[]):
         if princname is None:
@@ -428,11 +427,11 @@ class K5Realm(object):
                         **keywords)
 
     def special_env(self, name, has_kdc_conf, krb5_conf=None, kdc_conf=None):
-        krb5_conf_path = os.path.join(self.tmpdir, 'krb5.conf.%s' % name)
+        krb5_conf_path = os.path.join(self.basedir, 'krb5.conf.%s' % name)
         krb5_conf = _cfg_merge(self._krb5_conf, krb5_conf)
         self._create_conf(krb5_conf, krb5_conf_path)
         if has_kdc_conf:
-            kdc_conf_path = os.path.join(self.tmpdir, 'kdc.conf.%s' % name)
+            kdc_conf_path = os.path.join(self.basedir, 'kdc.conf.%s' % name)
             kdc_conf = _cfg_merge(self._kdc_conf, kdc_conf)
             self._create_conf(kdc_conf, kdc_conf_path)
         else:
